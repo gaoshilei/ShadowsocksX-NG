@@ -114,6 +114,25 @@ GCDWebServer *webServer =nil;
     }
 }
 
++ (void)addArguments4ManualSpecifyProxyExceptions:(NSMutableArray*) args {
+    NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+
+    NSString* rawExceptions = [defaults stringForKey:@"ProxyExceptions"];
+    if (rawExceptions) {
+        NSCharacterSet* whites = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+        NSMutableCharacterSet* seps = [NSMutableCharacterSet characterSetWithCharactersInString:@",、"];
+        [seps formUnionWithCharacterSet:whites];
+
+        NSArray* exceptions = [rawExceptions componentsSeparatedByCharactersInSet:seps];
+        for (NSString* domainOrHost in exceptions) {
+            if ([domainOrHost length] > 0) {
+                [args addObject:@"-x"];
+                [args addObject:domainOrHost];
+            }
+        }
+    }
+}
+
 + (NSString*)getPACFilePath {
     return [NSString stringWithFormat:@"%@/%@", NSHomeDirectory(), @".ShadowsocksX-NG/gfwlist.js"];
 }
@@ -129,6 +148,7 @@ GCDWebServer *webServer =nil;
     NSMutableArray* args = [@[@"--mode", @"auto", @"--pac-url", [url absoluteString]]mutableCopy];
     
     [self addArguments4ManualSpecifyNetworkServices:args];
+    [self addArguments4ManualSpecifyProxyExceptions:args];
     [self callHelper:args];
 }
 
@@ -148,6 +168,7 @@ GCDWebServer *webServer =nil;
 //    }
     
     [self addArguments4ManualSpecifyNetworkServices:args];
+    [self addArguments4ManualSpecifyProxyExceptions:args];
     [self callHelper:args];
     [self stopPACServer];
 }
@@ -162,6 +183,7 @@ GCDWebServer *webServer =nil;
                               , @"--pac-url", [url absoluteString]
                               ]mutableCopy];
     [self addArguments4ManualSpecifyNetworkServices:args];
+    [self addArguments4ManualSpecifyProxyExceptions:args];
     [self callHelper:args];
     [self stopPACServer];
 }
@@ -223,13 +245,16 @@ GCDWebServer *webServer =nil;
                                           if(flags & DISPATCH_VNODE_DELETE)
                                           {
                                               dispatch_source_cancel(source);
-                                          } else {
-                                              NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
-                                              if ([defaults boolForKey:@"ShadowsocksOn"]) {
-                                                  if ([[defaults stringForKey:@"ShadowsocksRunningMode"] isEqualToString:@"auto"]) {
-                                                      [ProxyConfHelper disableProxy];
-                                                      [ProxyConfHelper enablePACProxy];
-                                                  }
+                                          }
+                                          
+                                          // The PAC file was written by atomically (PACUtils.swift:134)
+                                          // That means DISPATCH_VNODE_DELETE event always be trigged
+                                          // Need to be run the following statements in any events
+                                          NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+                                          if ([defaults boolForKey:@"ShadowsocksOn"]) {
+                                              if ([[defaults stringForKey:@"ShadowsocksRunningMode"] isEqualToString:@"auto"]) {
+                                                  [ProxyConfHelper disableProxy];
+                                                  [ProxyConfHelper enablePACProxy];
                                               }
                                           }
                                       });

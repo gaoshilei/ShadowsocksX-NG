@@ -14,6 +14,7 @@ import RxSwift
 @NSApplicationMain
 class AppDelegate: NSObject, NSApplicationDelegate, NSUserNotificationCenterDelegate {
     
+    var shareWinCtrl: ShareServerProfilesWindowController!
     var qrcodeWinCtrl: SWBQRCodeWindowController!
     var preferencesWinCtrl: PreferencesWindowController!
     var editUserRulesWinCtrl: UserRulesController!
@@ -80,8 +81,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserNotificationCenterDele
         
         // Prepare ss-local
         InstallSSLocal()
-        InstallKcptunClient()
         InstallPrivoxy()
+        InstallSimpleObfs()
+        InstallKcptun()
+        InstallV2rayPlugin()
+        
         // Prepare defaults
         let defaults = UserDefaults.standard
         defaults.register(defaults: [
@@ -99,9 +103,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserNotificationCenterDele
             "LocalHTTP.ListenPort": NSNumber(value: 1087 as UInt16),
             "LocalHTTPOn": true,
             "LocalHTTP.FollowGlobal": true,
-            "Kcptun.LocalHost": "127.0.0.1",
-            "Kcptun.LocalPort": NSNumber(value: 8388),
-            "Kcptun.Conn": NSNumber(value: 1),
+            "ProxyExceptions": "127.0.0.1, localhost, 192.168.0.0/16, 10.0.0.0/8, FE80::/64, ::1, FD00::/8",
             ])
         
         statusItem = NSStatusBar.system.statusItem(withLength: AppDelegate.StatusItemIconWidth)
@@ -109,13 +111,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserNotificationCenterDele
         image.isTemplate = true
         statusItem.image = image
         statusItem.menu = statusMenu
-        ServerProfileManager.instance.refreshPing()
         
         let notifyCenter = NotificationCenter.default
         
         _ = notifyCenter.rx.notification(NOTIFY_CONF_CHANGED)
             .subscribe(onNext: { noti in
-                SyncSSLocal()
                 self.applyConfig()
                 self.updateCopyHttpProxyExportMenu()
             })
@@ -188,7 +188,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserNotificationCenterDele
     func applicationWillTerminate(_ aNotification: Notification) {
         // Insert code here to tear down your application
         StopSSLocal()
-        StopKcptun()
         StopPrivoxy()
         ProxyConfHelper.disableProxy()
     }
@@ -253,49 +252,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserNotificationCenterDele
         ctrl.window?.makeKeyAndOrderFront(self)
     }
     
-    @IBAction func showQRCodeForCurrentServer(_ sender: NSMenuItem) {
-        var errMsg: String?
-        if let profile = ServerProfileManager.instance.getActiveProfile() {
-            if profile.isValid() {
-                // Show window
-                if qrcodeWinCtrl != nil{
-                    qrcodeWinCtrl.close()
-                }
-                qrcodeWinCtrl = SWBQRCodeWindowController(windowNibName: NSNib.Name(rawValue: "SWBQRCodeWindowController"))
-                qrcodeWinCtrl.qrCode = profile.URL()!.absoluteString
-                qrcodeWinCtrl.legacyQRCode = profile.URL(legacy: true)!.absoluteString
-                qrcodeWinCtrl.title = profile.title()
-                qrcodeWinCtrl.showWindow(self)
-                NSApp.activate(ignoringOtherApps: true)
-                qrcodeWinCtrl.window?.makeKeyAndOrderFront(nil)
-                
-                return
-            } else {
-                errMsg = "Current server profile is not valid.".localized
-            }
-        } else {
-            errMsg = "No current server profile.".localized
+    @IBAction func showShareServerProfiles(_ sender: NSMenuItem) {
+        if shareWinCtrl != nil {
+            shareWinCtrl.close()
         }
-        if let msg = errMsg {
-            self.makeToast(msg)
-        }
+        shareWinCtrl = ShareServerProfilesWindowController(windowNibName: NSNib.Name(rawValue: "ShareServerProfilesWindowController"))
+        shareWinCtrl.showWindow(self)
+        NSApp.activate(ignoringOtherApps: true)
+        shareWinCtrl.window?.makeKeyAndOrderFront(nil)
     }
     
     @IBAction func scanQRCodeFromScreen(_ sender: NSMenuItem) {
         ScanQRCodeOnScreen()
     }
     
-    @IBAction func showBunchJsonExampleFile(sender: NSMenuItem) {
-        ServerProfileManager.showExampleConfigFile()
-    }
-    
-    @IBAction func importBunchJsonFile(sender: NSMenuItem) {
-        ServerProfileManager.instance.importConfigFile()
-        //updateServersMenu()//not working
-    }
-    
-    @IBAction func exportAllServerProfile(sender: NSMenuItem) {
-        ServerProfileManager.instance.exportConfigFile()
+    @IBAction func importProfileURLFromPasteboard(_ sender: NSMenuItem) {
+        let pb = NSPasteboard.general
+        if #available(OSX 10.13, *) {
+            if let text = pb.string(forType: NSPasteboard.PasteboardType.URL) {
+                if let url = URL(string: text) {
+                    NotificationCenter.default.post(
+                        name: Notification.Name(rawValue: "NOTIFY_FOUND_SS_URL"), object: nil
+                        , userInfo: [
+                            "urls": [url],
+                            "source": "pasteboard",
+                            ])
+                }
+            }
+        }
+        if let text = pb.string(forType: NSPasteboard.PasteboardType.string) {
+            var urls = text.split(separator: "\n")
+                .map { String($0).trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }
+                .map { URL(string: $0) }
+                .filter { $0 != nil }
+                .map { $0! }
+            urls = urls.filter { $0.scheme == "ss" }
+            
+            NotificationCenter.default.post(
+                name: Notification.Name(rawValue: "NOTIFY_FOUND_SS_URL"), object: nil
+                , userInfo: [
+                    "urls": urls,
+                    "source": "pasteboard",
+                    ])
+        }
     }
 
     @IBAction func selectPACMode(_ sender: NSMenuItem) {
@@ -327,7 +326,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserNotificationCenterDele
         
         preferencesWinCtrl.showWindow(self)
         NSApp.activate(ignoringOtherApps: true)
-        preferencesWinCtrl.window?.makeKeyAndOrderFront(self)
     }
     
     @IBAction func showAllInOnePreferences(_ sender: NSMenuItem) {
@@ -383,6 +381,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserNotificationCenterDele
     
     @IBAction func feedback(_ sender: NSMenuItem) {
         NSWorkspace.shared.open(URL(string: "https://github.com/qiuyuzhou/ShadowsocksX-NG/issues")!)
+    }
+    
+    @IBAction func checkForUpdates(_ sender: NSMenuItem) {
+        NSWorkspace.shared.open(URL(string: "https://github.com/shadowsocks/ShadowsocksX-NG/releases")!)
+    }
+    
+    @IBAction func exportDiagnosis(_ sender: NSMenuItem) {
+        let savePanel = NSSavePanel()
+        savePanel.title = "Save All Server URLs To File".localized
+        savePanel.canCreateDirectories = true
+        savePanel.allowedFileTypes = ["txt"]
+        savePanel.isExtensionHidden = false
+        
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd_HHmmss"
+        let dateString = formatter.string(from: Date())
+        
+        savePanel.nameFieldStringValue = "ShadowsocksX-NG_diagnose_\(dateString)"
+        
+        savePanel.becomeKey()
+        let result = savePanel.runModal()
+        if (result.rawValue == NSFileHandlingPanelOKButton) {
+            if let url = savePanel.url {
+                let diagnosisText = diagnose()
+                try! diagnosisText.write(to: url, atomically: false, encoding: String.Encoding.utf8)
+            }
+        }
+    }
+    
+    @IBAction func showHelp(_ sender: NSMenuItem) {
+        NSWorkspace.shared.open(URL(string: "https://github.com/shadowsocks/ShadowsocksX-NG/wiki")!)
     }
     
     @IBAction func showAbout(_ sender: NSMenuItem) {
@@ -535,30 +564,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSUserNotificationCenterDele
             let urls: [URL] = userInfo["urls"] as! [URL]
             
             let mgr = ServerProfileManager.instance
-            var isChanged = false
+            var addCount = 0
+            
+            var subtitle: String = ""
+            if userInfo["source"] as! String == "qrcode" {
+                subtitle = "By scan QR Code".localized
+            } else if userInfo["source"] as! String == "url" {
+                subtitle = "By handle SS URL".localized
+            } else if userInfo["source"] as! String == "pasteboard" {
+                subtitle = "By import from pasteboard".localized
+            }
             
             for url in urls {
                 if let profile = ServerProfile(url: url) {
                     mgr.profiles.append(profile)
-                    isChanged = true
-                    
-                    var subtitle: String = ""
-                    if userInfo["source"] as! String == "qrcode" {
-                        subtitle = "By scan QR Code".localized
-                    } else if userInfo["source"] as! String == "url" {
-                        subtitle = "By Handle SS URL".localized
-                    }
-                    
-                    sendNotify("Add Shadowsocks Server Profile".localized, subtitle, "Host: \(profile.serverHost)")
+                    addCount = addCount + 1
                 }
             }
             
-            if isChanged {
+            if addCount > 0 {
+                sendNotify("Add \(addCount) Shadowsocks Server Profile".localized, subtitle, "")
                 mgr.save()
-                ServerProfileManager.instance.refreshPing()
                 self.updateServersMenu()
             } else {
-                sendNotify("Not found valid qrcode of shadowsocks profile.", "", "")
+                sendNotify("", "", "Not found valid qrcode or url of shadowsocks profile".localized)
             }
         }
     }
