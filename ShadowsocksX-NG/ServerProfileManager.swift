@@ -12,12 +12,10 @@ class ServerProfileManager: NSObject {
     
     static let instance:ServerProfileManager = ServerProfileManager()
     
-    var profiles:[ServerProfile]
+    var profiles:[ServerProfile] = [ServerProfile]()
     var activeProfileId: String?
     
     fileprivate override init() {
-        profiles = [ServerProfile]()
-        
         let defaults = UserDefaults.standard
         if let _profiles = defaults.array(forKey: "ServerProfiles") {
             for _profile in _profiles {
@@ -50,6 +48,19 @@ class ServerProfileManager: NSObject {
         }
     }
     
+    func reload() {
+        profiles.removeAll()
+        
+        let defaults = UserDefaults.standard
+        if let _profiles = defaults.array(forKey: "ServerProfiles") {
+            for _profile in _profiles {
+                let profile = ServerProfile.fromDictionary(_profile as! [String: Any])
+                profiles.append(profile)
+            }
+        }
+        activeProfileId = defaults.string(forKey: "ActiveServerProfileId")
+    }
+    
     func getActiveProfile() -> ServerProfile? {
         if let id = activeProfileId {
             for p in profiles {
@@ -61,5 +72,34 @@ class ServerProfileManager: NSObject {
         } else {
             return nil
         }
+    }
+    
+    func addServerProfileByURL(urls: [URL]) -> Int {
+        var addCount = 0
+        
+        for url in urls {
+            if let profile = ServerProfile(url: url) {
+                profiles.append(profile)
+                addCount = addCount + 1
+            }
+        }
+        
+        if addCount > 0 {
+            save()
+            NotificationCenter.default
+                .post(name: NOTIFY_SERVER_PROFILES_CHANGED, object: nil)
+        }
+        
+        return addCount
+    }
+    
+    static func findURLSInText(_ text: String) -> [URL] {
+        var urls = text.split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }
+            .map { URL(string: $0) }
+            .filter { $0 != nil }
+            .map { $0! }
+        urls = urls.filter { $0.scheme == "ss" }
+        return urls
     }
 }
